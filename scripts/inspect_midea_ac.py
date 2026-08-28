@@ -279,6 +279,7 @@ class RawPowerRecorder:
         self.x51_samples: list[bytes] = []
         self.c1_energy_samples: list[bytes] = []
         self.c1_outdoor_power_samples: list[bytes] = []
+        self.query_power_states: dict[str, list[Any]] = {}
         self._write(
             "\n"
             + "=" * 72
@@ -311,6 +312,9 @@ class RawPowerRecorder:
         body: bytes,
     ) -> None:
         """Record query identity and its unencrypted appliance body."""
+        self.query_power_states.setdefault(query_name, []).append(
+            attributes.get("power"),
+        )
         state = " ".join(
             f"{name}={attributes.get(name)!r}" for name in POWER_SAMPLE_FIELDS
         )
@@ -398,6 +402,11 @@ class RawPowerRecorder:
     def print_c1_summary(self) -> None:
         """Report whether the device answered the group-four/seven queries."""
         print("\n[C1 0x44 功率/能耗响应]")
+        power_query_states = self.query_power_states.get(PowerQuery.__name__, [])
+        print(
+            f"  已发送 {len(power_query_states)} 次；发送时 power 状态: "
+            f"{list(dict.fromkeys(power_query_states))}",
+        )
         if self.c1_energy_samples:
             lengths = sorted({len(sample) for sample in self.c1_energy_samples})
             print(f"  收到 {len(self.c1_energy_samples)} 条，长度: {lengths}")
@@ -406,6 +415,14 @@ class RawPowerRecorder:
             print("  没有收到 C1 0x44 响应。")
 
         print("\n[C1 0x47 外机功率响应]")
+        group_seven_states = self.query_power_states.get(
+            GroupSevenQuery.__name__,
+            [],
+        )
+        print(
+            f"  已发送 {len(group_seven_states)} 次；发送时 power 状态: "
+            f"{list(dict.fromkeys(group_seven_states))}",
+        )
         if self.c1_outdoor_power_samples:
             lengths = sorted(
                 {len(sample) for sample in self.c1_outdoor_power_samples},
@@ -594,12 +611,9 @@ def inspect_device(args: argparse.Namespace) -> int:  # noqa: C901
         original_build_query = device.build_query
 
         def build_query_with_c1_probes() -> list[Any]:
-            """Add explicit fixed-length C1 probes for a running BB AC."""
+            """Add explicit fixed-length C1 probes for a BB AC in any power state."""
             queries: list[Any] = original_build_query()
-            if not (
-                getattr(device, "_used_subprotocol", False)
-                and device.attributes.get("power") is True
-            ):
+            if not getattr(device, "_used_subprotocol", False):
                 return queries
             protocol_version = queries[0].protocol_version
             if args.power_query and not any(
