@@ -19,7 +19,7 @@ if str(REPOSITORY_ROOT) not in sys.path:
 
 from midealan.const import DeviceType
 from midealan.devices import device_selector
-from midealan.devices.ac.message import GroupSevenQuery
+from midealan.devices.ac.message import GroupSevenQuery, PowerQuery
 from midealan.discover import discover
 
 _LOGGER = logging.getLogger(__name__)
@@ -35,7 +35,21 @@ MESSAGE_CHECKSUM_LENGTH = 1
 BB_BODY_TYPE = 0xBB
 BB_HEADER_LENGTH = 6
 BB_GROUP_INDEX = 5
+BB_INDOOR_GROUP = 0x10
 BB_OUTDOOR_GROUP = 0x30
+BB_FEATURE_GROUP = 0x4C
+BB_ELECTRICITY_CAPABILITY_GROUP = 0x51
+BB_X10_ENERGY_NEED_INDEX = 13
+BB_X30_ELECTRICITY_QUERY_FLAGS_INDEX = 91
+BB_X30_ELECTRICITY_QUERY_SUPPORTED_MASK = 0x01
+BB_X4C_SOLAR_CAPABILITY_INDEX = 11
+BB_X4C_SOLAR_CAPABILITY_MASK = 0x04
+BB_X4C_SOLAR_POWER_START = 12
+BB_X4C_SOLAR_POWER_END = 16
+BB_X51_MESSAGE_TYPE_INDEX = 0
+BB_X51_SUPPORTED_MESSAGE_TYPES = (0x03, 0x04)
+BB_X51_ELECTRICITY_QUERY_FLAGS_INDEX = 6
+BB_X51_ELECTRICITY_QUERY_SUPPORTED_MASK = 0x02
 C1_BODY_TYPE = 0xC1
 C1_GROUP_INDEX = 3
 C1_ENERGY_GROUP = 0x44
@@ -221,6 +235,12 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         help="输出全部 attributes，包括值为 None 的字段",
     )
     parser.add_argument(
+        "--power-query",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="额外探测定长 C1 0x44 功率/能耗（默认启用）",
+    )
+    parser.add_argument(
         "--group-seven",
         action=argparse.BooleanOptionalAction,
         default=True,
@@ -253,7 +273,10 @@ class RawPowerRecorder:
     def __init__(self, path: Path) -> None:
         """Start one append-only capture session."""
         self.path = path
+        self.x10_samples: list[bytes] = []
         self.x30_samples: list[bytes] = []
+        self.x4c_samples: list[bytes] = []
+        self.x51_samples: list[bytes] = []
         self.c1_energy_samples: list[bytes] = []
         self.c1_outdoor_power_samples: list[bytes] = []
         self._write(
@@ -321,8 +344,14 @@ class RawPowerRecorder:
             group = body[BB_GROUP_INDEX]
             subbody = bytes(body[BB_HEADER_LENGTH:])
             label += f" BB_group=0x{group:02X} subbody_len={len(subbody)}"
-            if group == BB_OUTDOOR_GROUP:
+            if group == BB_INDOOR_GROUP:
+                self.x10_samples.append(subbody)
+            elif group == BB_OUTDOOR_GROUP:
                 self.x30_samples.append(subbody)
+            elif group == BB_FEATURE_GROUP:
+                self.x4c_samples.append(subbody)
+            elif group == BB_ELECTRICITY_CAPABILITY_GROUP:
+                self.x51_samples.append(subbody)
         elif len(body) > C1_GROUP_INDEX and body_type == C1_BODY_TYPE:
             group = body[C1_GROUP_INDEX]
             label += f" C1_group=0x{group:02X}"
@@ -390,6 +419,58 @@ class RawPowerRecorder:
         else:
             print("  没有收到 C1 0x47 响应。")
 
+    def print_22396831_lua_fields(self) -> None:
+        """Print fields defined by the exact model 22396831 Lua."""
+        print("\n[型号 22396831 Lua 字段核对]")
+        if self.x10_samples and len(self.x10_samples[-1]) > BB_X10_ENERGY_NEED_INDEX:
+            energy_need = self.x10_samples[-1][BB_X10_ENERGY_NEED_INDEX]
+            print(f"  BB 0x10 energy_need: {energy_need}（运行需求值，不是 W/kWh）")
+        else:
+            print("  BB 0x10 energy_need: 未返回")
+
+        if (
+            self.x30_samples
+            and len(self.x30_samples[-1]) > BB_X30_ELECTRICITY_QUERY_FLAGS_INDEX
+        ):
+            x30_flag = bool(
+                self.x30_samples[-1][BB_X30_ELECTRICITY_QUERY_FLAGS_INDEX]
+                & BB_X30_ELECTRICITY_QUERY_SUPPORTED_MASK,
+            )
+            print(f"  BB 0x30 has_elec_query_30: {x30_flag}")
+        else:
+            print("  BB 0x30 has_elec_query_30: 未返回")
+
+        x51 = self.x51_samples[-1] if self.x51_samples else b""
+        if (
+            len(x51) > BB_X51_ELECTRICITY_QUERY_FLAGS_INDEX
+            and x51[BB_X51_MESSAGE_TYPE_INDEX] in BB_X51_SUPPORTED_MESSAGE_TYPES
+        ):
+            x51_flag = bool(
+                x51[BB_X51_ELECTRICITY_QUERY_FLAGS_INDEX]
+                & BB_X51_ELECTRICITY_QUERY_SUPPORTED_MASK,
+            )
+            print(f"  BB 0x51 has_elec_query: {x51_flag}")
+        else:
+            print("  BB 0x51 has_elec_query: 未返回")
+
+        x4c = self.x4c_samples[-1] if self.x4c_samples else b""
+        if len(x4c) >= BB_X4C_SOLAR_POWER_END:
+            has_solar_power = bool(
+                x4c[BB_X4C_SOLAR_CAPABILITY_INDEX] & BB_X4C_SOLAR_CAPABILITY_MASK,
+            )
+            solar_raw = x4c[BB_X4C_SOLAR_POWER_START:BB_X4C_SOLAR_POWER_END]
+            print(
+                f"  BB 0x4C has_solar_controller_rate_display: {has_solar_power}",
+            )
+            print(
+                "  BB 0x4C solar_module_outdoor_total_power raw: "
+                f"{solar_raw.hex()}（光伏模块字段，不是压缩机功率）",
+            )
+        else:
+            print("  BB 0x4C 光伏模块字段: 未返回")
+
+        print("  精确 Lua 未定义 C1 0x44/0x47 查询或解析。")
+
 
 def print_capabilities(capabilities: Mapping[str, bool]) -> None:
     """Print capability flags explicitly advertised in B5 responses."""
@@ -435,10 +516,14 @@ def print_device_report(device: Any, *, show_all: bool) -> None:  # noqa: ANN401
     uses_bb = bool(getattr(device, "_used_subprotocol", False))
     print(f"status_protocol: {'BB 子协议' if uses_bb else '普通 AC 协议'}")
     if uses_bb:
-        supports_energy = bool(
-            getattr(device, "_bb_has_electricity_query", False),
+        print(
+            "bb_x30_has_elec_query: "
+            f"{getattr(device, '_bb_has_electricity_query_30', None)}",
         )
-        print(f"bb_group4_energy_query: {supports_energy}")
+        print(
+            "bb_x51_has_elec_query: "
+            f"{getattr(device, '_bb_has_electricity_query_51', None)}",
+        )
     unsupported = getattr(device, "_unsupported_protocol", [])
     print(
         "unsupported_queries: "
@@ -470,7 +555,7 @@ def print_power_sample(device: Any, current: int, total: int) -> None:  # noqa: 
     print(f"采样 {current}/{total}: {values}")
 
 
-def inspect_device(args: argparse.Namespace) -> int:
+def inspect_device(args: argparse.Namespace) -> int:  # noqa: C901
     """Discover, authenticate, and inspect one real AC device."""
     device: Any = None
     try:
@@ -508,21 +593,23 @@ def inspect_device(args: argparse.Namespace) -> int:
         original_build_send = device.build_send
         original_build_query = device.build_query
 
-        def build_query_with_group_seven_probe() -> list[Any]:
-            """Add the fixed-length outdoor-power probe for a running BB AC."""
+        def build_query_with_c1_probes() -> list[Any]:
+            """Add explicit fixed-length C1 probes for a running BB AC."""
             queries: list[Any] = original_build_query()
-            if (
-                args.group_seven
-                and getattr(device, "_used_subprotocol", False)
+            if not (
+                getattr(device, "_used_subprotocol", False)
                 and device.attributes.get("power") is True
-                and not any(isinstance(query, GroupSevenQuery) for query in queries)
             ):
-                queries.append(
-                    GroupSevenQuery(
-                        queries[0].protocol_version,
-                        padded=True,
-                    ),
-                )
+                return queries
+            protocol_version = queries[0].protocol_version
+            if args.power_query and not any(
+                isinstance(query, PowerQuery) for query in queries
+            ):
+                queries.append(PowerQuery(protocol_version, padded=True))
+            if args.group_seven and not any(
+                isinstance(query, GroupSevenQuery) for query in queries
+            ):
+                queries.append(GroupSevenQuery(protocol_version, padded=True))
             return queries
 
         def process_message_with_capture(message: bytes) -> dict[str, Any]:
@@ -542,7 +629,7 @@ def inspect_device(args: argparse.Namespace) -> int:
 
         device.process_message = process_message_with_capture
         device.build_send = build_send_with_capture
-        device.build_query = build_query_with_group_seven_probe
+        device.build_query = build_query_with_c1_probes
 
         used_bb_before_connect = bool(getattr(device, "_used_subprotocol", False))
         if not device.connect(check_protocol=True):
@@ -569,6 +656,8 @@ def inspect_device(args: argparse.Namespace) -> int:
 
         print_device_report(device, show_all=args.show_all)
         recorder.print_x30_changes()
+        if str(device.model) == "22396831" and int(device.subtype) == 0:
+            recorder.print_22396831_lua_fields()
         recorder.print_c1_summary()
         attributes = device.attributes
         if (

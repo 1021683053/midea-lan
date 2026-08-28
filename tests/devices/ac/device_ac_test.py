@@ -309,12 +309,6 @@ class TestMideaACDevice:
         assert isinstance(queries[1], SubProtocolQuery)
         assert isinstance(queries[2], SubProtocolQuery)
 
-        self.device._bb_has_electricity_query = True
-        self.device._attributes[DeviceAttributes.power] = True
-        queries = self.device.build_query()
-        assert len(queries) == 4
-        assert isinstance(queries[3], PowerQuery)
-
         self.device._used_subprotocol = False
         queries = self.device.build_query()
         assert len(queries) == 11
@@ -385,32 +379,23 @@ class TestMideaACDevice:
             SubProtocolQuery30,
         ]
 
-    def test_22396831_uses_padded_power_query(self) -> None:
-        """Test the exact BB model uses Midea's fixed-length group-data query."""
-        device = self._make_device("22396831", 0)
-        device._bb_has_electricity_query = True
-        device._attributes[DeviceAttributes.power] = True
-
-        power_query = device.build_query()[-1]
-
-        assert isinstance(power_query, PowerQuery)
-        assert len(power_query.body) == 22
-        assert power_query.body[:4] == bytearray([0x41, 0x21, 0x01, 0x44])
-
-    def test_bb_electricity_flag_enables_power_query(self) -> None:
-        """Test a BB capability response enables a previously rejected query."""
+    def test_bb_electricity_flags_are_diagnostic_only(self) -> None:
+        """Test BB electricity indicators do not enable unsupported C1 probes."""
         device = self._make_device("22396831", 0)
         device._attributes[DeviceAttributes.power] = True
-        device._unsupported_protocol.append(PowerQuery.__name__)
         body = bytearray(98)
         body[:6] = bytearray([0xBB, 0, 0, 0, 0, 0x30])
         body[97] = 0x03
 
         device.process_message(self._response(body))
 
-        assert device._bb_has_electricity_query is True
-        assert PowerQuery.__name__ not in device._unsupported_protocol
-        assert isinstance(device.build_query()[-1], PowerQuery)
+        assert device._bb_has_electricity_query_30 is True
+        assert device._bb_has_electricity_query_51 is None
+        assert [type(query) for query in device.build_query()] == [
+            SubProtocolQuery10,
+            SubProtocolQuery11,
+            SubProtocolQuery30,
+        ]
 
     @pytest.mark.parametrize(
         ("model", "subtype"),

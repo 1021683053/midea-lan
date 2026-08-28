@@ -34,7 +34,9 @@ BB_INDOOR_TEMPERATURE_HIGH_INDEX = 8
 BB_INDOOR_HUMIDITY_INDEX = 30
 BB_SN8_FLAG_INDEX = 80
 BB_OUTDOOR_TEMPERATURE_HIGH_INDEX = 6
-# Exact-model Lua for 22396831 advertises electricity queries in two BB groups.
+# Model 22396831 Lua exposes electricity-query indicator bits in two BB groups.
+# These are reported separately because neither bit guarantees that the appliance
+# will answer the ordinary C1 group-four/group-seven LAN queries.
 BB_X30_ELECTRICITY_QUERY_FLAGS_INDEX = 91
 BB_X30_ELECTRICITY_QUERY_SUPPORTED_MASK = 0x01
 BB_X51_ELECTRICITY_QUERY_FLAGS_INDEX = 6
@@ -1596,7 +1598,7 @@ class SubProtocolBody(MessageBody):
                     BB_COMPRESSOR_FREQUENCY_INDEX
                 ]
             if subprotocol_body_len > BB_X30_ELECTRICITY_QUERY_FLAGS_INDEX:
-                self.has_electricity_query = bool(
+                self.has_electricity_query_30 = bool(
                     subprotocol_body[BB_X30_ELECTRICITY_QUERY_FLAGS_INDEX]
                     & BB_X30_ELECTRICITY_QUERY_SUPPORTED_MASK,
                 )
@@ -1605,7 +1607,7 @@ class SubProtocolBody(MessageBody):
             and subprotocol_body_len > BB_X51_ELECTRICITY_QUERY_FLAGS_INDEX
             and subprotocol_body[0] in (0x03, 0x04)
         ):
-            self.has_electricity_query = bool(
+            self.has_electricity_query_51 = bool(
                 subprotocol_body[BB_X51_ELECTRICITY_QUERY_FLAGS_INDEX]
                 & BB_X51_ELECTRICITY_QUERY_SUPPORTED_MASK,
             )

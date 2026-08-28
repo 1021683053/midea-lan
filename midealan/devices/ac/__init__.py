@@ -141,7 +141,6 @@ class ACModelCapabilities:
     attributes: frozenset[DeviceAttributes] = frozenset()
     uses_bb_protocol: bool = False
     has_bb_fresh_air: bool = False
-    uses_padded_group_data_query: bool = False
 
 
 DEFAULT_AC_MODEL_CAPABILITIES = ACModelCapabilities()
@@ -149,11 +148,10 @@ DEFAULT_AC_MODEL_CAPABILITIES = ACModelCapabilities()
 # exact model/subtype pairs. Keep unrelated devices hidden from attributes and
 # commands whose bytes may have a different meaning on other firmware.
 AC_MODEL_CAPABILITIES = {
-    # Exact Lua and captures for this model use BB status groups and advertise
-    # the ordinary C1/0x44 electricity query from BB 0x30 and 0x51.
+    # Exact Lua and captures for this model use BB status groups. Its
+    # has_elec_query flags are diagnostics, not proof of a C1 LAN response.
     ("22396831", 0): ACModelCapabilities(
         uses_bb_protocol=True,
-        uses_padded_group_data_query=True,
     ),
     ("23096633", 1): ACModelCapabilities(
         attributes=frozenset(
@@ -326,7 +324,8 @@ class MideaACDevice(MideaDevice):
         self._used_subprotocol: bool = self._model_capabilities.uses_bb_protocol
         self._bb_sn8_flag: bool = False
         self._bb_timer: bool = False
-        self._bb_has_electricity_query: bool = False
+        self._bb_has_electricity_query_30: bool | None = None
+        self._bb_has_electricity_query_51: bool | None = None
         # per-mode setpoint limits from the B5 capability, keyed by mode value
         self._temperature_limits: dict[int, tuple[float, float]] | None = None
         # decoded B5 capability flags (accumulated across B5 frames)
@@ -390,19 +389,6 @@ class MideaACDevice(MideaDevice):
                 SubProtocolQuery11(self._message_protocol_version),
                 SubProtocolQuery30(self._message_protocol_version),
             ]
-            # Some BB appliances advertise has_elec_query_30 in their 0x30
-            # status but return the actual power/energy data through the
-            # ordinary C1/0x44 group-data-four response used by the app.
-            if (
-                self._bb_has_electricity_query
-                and self._attributes[DeviceAttributes.power]
-            ):
-                bb_queries.append(
-                    PowerQuery(
-                        self._message_protocol_version,
-                        padded=self._model_capabilities.uses_padded_group_data_query,
-                    ),
-                )
             return bb_queries
         queries: list[ACQuery] = [
             MessageQuery(self._message_protocol_version),
@@ -451,18 +437,10 @@ class MideaACDevice(MideaDevice):
                 self._bb_sn8_flag = message.sn8_flag
             if hasattr(message, "timer"):
                 self._bb_timer = message.timer
-            if hasattr(message, "has_electricity_query"):
-                supports_electricity_query = message.has_electricity_query
-                if supports_electricity_query and not self._bb_has_electricity_query:
-                    # An unknown BB model may have timed out on PowerQuery
-                    # during the initial ordinary-protocol probe, before its
-                    # BB support flag and live power state were known.
-                    self._unsupported_protocol = [
-                        protocol
-                        for protocol in self._unsupported_protocol
-                        if protocol != PowerQuery.__name__
-                    ]
-                self._bb_has_electricity_query = supports_electricity_query
+            if hasattr(message, "has_electricity_query_30"):
+                self._bb_has_electricity_query_30 = message.has_electricity_query_30
+            if hasattr(message, "has_electricity_query_51"):
+                self._bb_has_electricity_query_51 = message.has_electricity_query_51
         if self._model_capabilities.has_bb_fresh_air and hasattr(
             message,
             "bb_fresh_air_power",

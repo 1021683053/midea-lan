@@ -1693,7 +1693,7 @@ class TestMessageACResponse:
         body[12] = 0x80  # Outdoor temperature byte 2
         body[16] = 49  # Compressor target frequency
         body[17] = 47  # Compressor actual frequency
-        body[97] = 0x03  # sub-body[91] bit 0: group-4 electricity query
+        body[97] = 0x03  # sub-body[91] bit 0: has_elec_query_30
 
         response = MessageACResponse(self.header + body)
         assert hasattr(response, "outdoor_temperature")
@@ -1702,7 +1702,7 @@ class TestMessageACResponse:
         assert response.target_compressor_frequency == 49
         assert hasattr(response, "compressor_frequency")
         assert response.compressor_frequency == 47
-        assert vars(response)["has_electricity_query"] is True
+        assert vars(response)["has_electricity_query_30"] is True
 
         body[12] = 0x65  # Outdoor temperature byte 2
 
@@ -1719,7 +1719,7 @@ class TestMessageACResponse:
 
         response = MessageACResponse(self.header + body)
 
-        assert vars(response)["has_electricity_query"] is False
+        assert vars(response)["has_electricity_query_30"] is False
 
     def test_bb_0x51_electricity_flag(self) -> None:
         """Test BB 0x51 independently advertises electricity queries."""
@@ -1731,7 +1731,7 @@ class TestMessageACResponse:
 
         response = MessageACResponse(self.header + body)
 
-        assert vars(response)["has_electricity_query"] is True
+        assert vars(response)["has_electricity_query_51"] is True
 
     def test_captured_bb_0x30_frequency_response(self) -> None:
         """Test a complete frequency response captured from model 23096633."""
