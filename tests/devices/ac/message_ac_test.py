@@ -151,6 +151,16 @@ class TestPowerQuery:
         expected_body = bytearray([0x41, 0x21, 0x01, 0x44, 0x00, 0x01])
         assert msg.body[:-1] == expected_body
 
+    def test_padded_power_query_body(self) -> None:
+        """Test the fixed-length group query used by Midea reference Lua."""
+        msg = PowerQuery(protocol_version=ProtocolVersion.V1, padded=True)
+
+        assert len(msg.body) == 22
+        assert msg.body[:4] == bytearray([0x41, 0x21, 0x01, 0x44])
+        assert msg.body[4:20] == bytearray(16)
+        assert msg.body[20] != 0
+        assert msg.body[21] == calculate(msg.body[:21])
+
 
 class TestGroupDataQuery:
     """Test Message Group Data Query."""
@@ -1683,6 +1693,7 @@ class TestMessageACResponse:
         body[12] = 0x80  # Outdoor temperature byte 2
         body[16] = 49  # Compressor target frequency
         body[17] = 47  # Compressor actual frequency
+        body[97] = 0x03  # sub-body[91] bit 0: group-4 electricity query
 
         response = MessageACResponse(self.header + body)
         assert hasattr(response, "outdoor_temperature")
@@ -1691,12 +1702,36 @@ class TestMessageACResponse:
         assert response.target_compressor_frequency == 49
         assert hasattr(response, "compressor_frequency")
         assert response.compressor_frequency == 47
+        assert vars(response)["has_electricity_query"] is True
 
         body[12] = 0x65  # Outdoor temperature byte 2
 
         response = MessageACResponse(self.header + body)
         assert hasattr(response, "outdoor_temperature")
         assert response.outdoor_temperature == 258.9
+
+    def test_bb_0x30_without_electricity_flag(self) -> None:
+        """Test BB electricity support requires bit 0 at sub-body index 91."""
+        self.header[9] = 0x03
+        body = bytearray(100)
+        body[:6] = bytearray([0xBB, 0, 0, 0, 0, 0x30])
+        body[97] = 0x02
+
+        response = MessageACResponse(self.header + body)
+
+        assert vars(response)["has_electricity_query"] is False
+
+    def test_bb_0x51_electricity_flag(self) -> None:
+        """Test BB 0x51 independently advertises electricity queries."""
+        self.header[9] = 0x03
+        body = bytearray(22)
+        body[:6] = bytearray([0xBB, 0, 0, 0, 0, 0x51])
+        body[6] = 0x03
+        body[12] = 0x06
+
+        response = MessageACResponse(self.header + body)
+
+        assert vars(response)["has_electricity_query"] is True
 
     def test_captured_bb_0x30_frequency_response(self) -> None:
         """Test a complete frequency response captured from model 23096633."""

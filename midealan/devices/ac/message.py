@@ -34,6 +34,11 @@ BB_INDOOR_TEMPERATURE_HIGH_INDEX = 8
 BB_INDOOR_HUMIDITY_INDEX = 30
 BB_SN8_FLAG_INDEX = 80
 BB_OUTDOOR_TEMPERATURE_HIGH_INDEX = 6
+# Exact-model Lua for 22396831 advertises electricity queries in two BB groups.
+BB_X30_ELECTRICITY_QUERY_FLAGS_INDEX = 91
+BB_X30_ELECTRICITY_QUERY_SUPPORTED_MASK = 0x01
+BB_X51_ELECTRICITY_QUERY_FLAGS_INDEX = 6
+BB_X51_ELECTRICITY_QUERY_SUPPORTED_MASK = 0x02
 CONFORT_MODE_MIN_LENGTH = 16
 CONFORT_MODE_MIN_LENGTH2 = 23
 SMART_DRY_MIN_LENGTH = 20
@@ -64,6 +69,7 @@ XC1_OPERATING_TIME_MIN_LENGTH = 19
 
 # Group data query: the third payload byte selects the group, 0x40 | group number.
 XC1_GROUP_QUERY_BASE = 0x40
+XC1_PADDED_QUERY_BODY_LENGTH = 19
 # Minimum body length required to parse each group data response.
 XC1_GROUP_ONE_MIN_LENGTH = 15
 XC1_GROUP_TWO_MIN_LENGTH = 9
@@ -348,16 +354,25 @@ class GroupDataQuery(MessageACBase):
 
     _group = 0
 
-    def __init__(self, protocol_version: int) -> None:
+    def __init__(self, protocol_version: int, *, padded: bool = False) -> None:
         """Initialize AC message group data query."""
         super().__init__(
             protocol_version=protocol_version,
             message_type=MessageType.query,
             body_type=ListTypes.X41,
         )
+        self._padded = padded
 
     @property
     def _body(self) -> bytearray:
+        if self._padded:
+            # Midea reference Lua and msmart build group-data queries as a
+            # fixed 20-byte payload, followed by the message ID and CRC.
+            query_body = bytearray(XC1_PADDED_QUERY_BODY_LENGTH)
+            query_body[0:3] = bytearray(
+                [0x21, 0x01, XC1_GROUP_QUERY_BASE | self._group],
+            )
+            return query_body
         return bytearray(
             [0x21, 0x01, XC1_GROUP_QUERY_BASE | self._group, 0x00, 0x01],
         )
@@ -365,6 +380,8 @@ class GroupDataQuery(MessageACBase):
     @property
     def body(self) -> bytearray:
         """AC message group data query body."""
+        if self._padded:
+            return super().body
         body = bytearray([self.body_type]) + self._body
         body.append(calculate(body))
         return body
@@ -1578,6 +1595,20 @@ class SubProtocolBody(MessageBody):
                 self.compressor_frequency = subprotocol_body[
                     BB_COMPRESSOR_FREQUENCY_INDEX
                 ]
+            if subprotocol_body_len > BB_X30_ELECTRICITY_QUERY_FLAGS_INDEX:
+                self.has_electricity_query = bool(
+                    subprotocol_body[BB_X30_ELECTRICITY_QUERY_FLAGS_INDEX]
+                    & BB_X30_ELECTRICITY_QUERY_SUPPORTED_MASK,
+                )
+        elif (
+            data_type == ListTypes.X51
+            and subprotocol_body_len > BB_X51_ELECTRICITY_QUERY_FLAGS_INDEX
+            and subprotocol_body[0] in (0x03, 0x04)
+        ):
+            self.has_electricity_query = bool(
+                subprotocol_body[BB_X51_ELECTRICITY_QUERY_FLAGS_INDEX]
+                & BB_X51_ELECTRICITY_QUERY_SUPPORTED_MASK,
+            )
         elif data_type in (ListTypes.X13, ListTypes.X21):
             pass
 
