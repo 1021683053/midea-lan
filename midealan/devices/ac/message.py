@@ -590,9 +590,37 @@ class SubProtocolQuery(MessageSubProtocol):
 class SubProtocolQuery10(SubProtocolQuery):
     """AC sub protocol indoor status query."""
 
-    def __init__(self, protocol_version: int) -> None:
+    def __init__(
+        self,
+        protocol_version: int,
+        query_parameter: int | None = None,
+    ) -> None:
         """Initialize the indoor status query."""
         super().__init__(protocol_version, ListTypes.X10)
+        self._query_parameter = query_parameter
+
+    @property
+    def _subprotocol_body(self) -> bytes:
+        """Return the optional 0x10 query variant byte."""
+        if self._query_parameter is None:
+            return b""
+        return bytes([self._query_parameter])
+
+
+class SubProtocolQuery10RunStatus(SubProtocolQuery10):
+    """AC sub protocol 0x10 run-status query variant one."""
+
+    def __init__(self, protocol_version: int) -> None:
+        """Initialize the 0x10/0x01 run-status query."""
+        super().__init__(protocol_version, query_parameter=0x01)
+
+
+class SubProtocolQuery10RunStatus2(SubProtocolQuery10):
+    """AC sub protocol 0x10 run-status query variant two."""
+
+    def __init__(self, protocol_version: int) -> None:
+        """Initialize the 0x10/0x02 run-status query."""
+        super().__init__(protocol_version, query_parameter=0x02)
 
 
 class SubProtocolQuery11(SubProtocolQuery):
@@ -609,6 +637,30 @@ class SubProtocolQuery30(SubProtocolQuery):
     def __init__(self, protocol_version: int) -> None:
         """Initialize the outdoor status query."""
         super().__init__(protocol_version, ListTypes.X30)
+
+
+class SubProtocolQuery15(SubProtocolQuery):
+    """AC sub protocol machine-capability query."""
+
+    def __init__(self, protocol_version: int) -> None:
+        """Initialize the 0x15 machine-capability query."""
+        super().__init__(protocol_version, ListTypes.X15)
+
+
+class SubProtocolQuery4C(SubProtocolQuery):
+    """AC sub protocol feature-status query."""
+
+    def __init__(self, protocol_version: int) -> None:
+        """Initialize the 0x4C feature-status query."""
+        super().__init__(protocol_version, ListTypes.X4C)
+
+
+class SubProtocolQuery51(SubProtocolQuery):
+    """AC sub protocol electricity-capability query."""
+
+    def __init__(self, protocol_version: int) -> None:
+        """Initialize the 0x51 electricity-capability query."""
+        super().__init__(protocol_version, ListTypes.X51)
 
 
 class MessageSubProtocolSet(MessageSubProtocol):

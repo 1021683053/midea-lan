@@ -28,9 +28,14 @@ from midealan.devices.ac.message import (
     PowerFormats,
     PowerQuery,
     SubProtocolFreshAirSet,
+    SubProtocolQuery4C,
     SubProtocolQuery10,
+    SubProtocolQuery10RunStatus,
+    SubProtocolQuery10RunStatus2,
     SubProtocolQuery11,
+    SubProtocolQuery15,
     SubProtocolQuery30,
+    SubProtocolQuery51,
     ToggleDisplay,
 )
 from midealan.message import ListTypes, MessageBase, MessageType
@@ -467,12 +472,32 @@ class TestMessageSubProtocol:
         """Test BB queries have independent protocol identities."""
         queries = [
             SubProtocolQuery10(ProtocolVersion.V1),
+            SubProtocolQuery10RunStatus(ProtocolVersion.V1),
+            SubProtocolQuery10RunStatus2(ProtocolVersion.V1),
             SubProtocolQuery11(ProtocolVersion.V1),
+            SubProtocolQuery15(ProtocolVersion.V1),
             SubProtocolQuery30(ProtocolVersion.V1),
+            SubProtocolQuery4C(ProtocolVersion.V1),
+            SubProtocolQuery51(ProtocolVersion.V1),
         ]
 
-        assert [query.body[5] for query in queries] == [0x10, 0x11, 0x30]
-        assert len({query.__class__.__name__ for query in queries}) == 3
+        assert [query.body[5] for query in queries] == [
+            0x10,
+            0x10,
+            0x10,
+            0x11,
+            0x15,
+            0x30,
+            0x4C,
+            0x51,
+        ]
+        assert queries[1].body[:-2] == bytearray(
+            [0xAA, 0x09, 0x00, 0xFF, 0xFF, 0x10, 0x01],
+        )
+        assert queries[2].body[:-2] == bytearray(
+            [0xAA, 0x09, 0x00, 0xFF, 0xFF, 0x10, 0x02],
+        )
+        assert len({query.__class__.__name__ for query in queries}) == len(queries)
 
 
 class TestGroupOneQuery:

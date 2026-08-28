@@ -19,7 +19,19 @@ if str(REPOSITORY_ROOT) not in sys.path:
 
 from midealan.const import DeviceType
 from midealan.devices import device_selector
-from midealan.devices.ac.message import GroupSevenQuery, PowerQuery
+from midealan.devices.ac.message import (
+    GroupOneQuery,
+    GroupSevenQuery,
+    GroupTwoQuery,
+    GroupZeroQuery,
+    HumidityQuery,
+    PowerQuery,
+    SubProtocolQuery4C,
+    SubProtocolQuery10RunStatus,
+    SubProtocolQuery10RunStatus2,
+    SubProtocolQuery15,
+    SubProtocolQuery51,
+)
 from midealan.discover import discover
 
 _LOGGER = logging.getLogger(__name__)
@@ -40,6 +52,8 @@ BB_OUTDOOR_GROUP = 0x30
 BB_FEATURE_GROUP = 0x4C
 BB_ELECTRICITY_CAPABILITY_GROUP = 0x51
 BB_X10_ENERGY_NEED_INDEX = 13
+BB_X10_TOTAL_ELEC_START = 46
+BB_X10_TOTAL_ELEC_END = 50
 BB_X30_ELECTRICITY_QUERY_FLAGS_INDEX = 91
 BB_X30_ELECTRICITY_QUERY_SUPPORTED_MASK = 0x01
 BB_X4C_SOLAR_CAPABILITY_INDEX = 11
@@ -54,6 +68,22 @@ C1_BODY_TYPE = 0xC1
 C1_GROUP_INDEX = 3
 C1_ENERGY_GROUP = 0x44
 C1_OUTDOOR_POWER_GROUP = 0x47
+C1_GROUP_LABELS = {
+    0x40: "0x40 运行时长",
+    0x41: "0x41 压缩机电参",
+    0x42: "0x42 室内风机/水泵",
+    C1_ENERGY_GROUP: "0x44 实时/累计能耗",
+    0x45: "0x45 湿度",
+    C1_OUTDOOR_POWER_GROUP: "0x47 外机功率",
+}
+C1_PROBES = (
+    (GroupZeroQuery, 0x40),
+    (GroupOneQuery, 0x41),
+    (GroupTwoQuery, 0x42),
+    (PowerQuery, C1_ENERGY_GROUP),
+    (HumidityQuery, 0x45),
+    (GroupSevenQuery, C1_OUTDOOR_POWER_GROUP),
+)
 
 POWER_SAMPLE_FIELDS = (
     "power",
@@ -65,6 +95,12 @@ POWER_SAMPLE_FIELDS = (
     "realtime_power",
     "total_energy_consumption",
     "current_energy_consumption",
+    "total_operating_consumption",
+    "electrify_time",
+    "total_operating_time",
+    "current_operating_time",
+    "compressor_current",
+    "compressor_voltage",
 )
 
 GENERAL_STATUS_FIELDS = (
@@ -235,6 +271,18 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         help="输出全部 attributes，包括值为 None 的字段",
     )
     parser.add_argument(
+        "--all-c1-probes",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="BB 模式下额外发送 C1 0x40/41/42/44/45/47 只读查询（默认启用）",
+    )
+    parser.add_argument(
+        "--bb-status-variants",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="发送 Lua 已知的 BB 0x10/0x01、0x10/0x02 及 0x15/4C/51 查询（默认启用）",
+    )
+    parser.add_argument(
         "--power-query",
         action=argparse.BooleanOptionalAction,
         default=True,
@@ -277,8 +325,8 @@ class RawPowerRecorder:
         self.x30_samples: list[bytes] = []
         self.x4c_samples: list[bytes] = []
         self.x51_samples: list[bytes] = []
-        self.c1_energy_samples: list[bytes] = []
-        self.c1_outdoor_power_samples: list[bytes] = []
+        self.bb_samples: dict[int, list[bytes]] = {}
+        self.c1_samples: dict[int, list[bytes]] = {}
         self.query_power_states: dict[str, list[Any]] = {}
         self._write(
             "\n"
@@ -348,6 +396,7 @@ class RawPowerRecorder:
             group = body[BB_GROUP_INDEX]
             subbody = bytes(body[BB_HEADER_LENGTH:])
             label += f" BB_group=0x{group:02X} subbody_len={len(subbody)}"
+            self.bb_samples.setdefault(group, []).append(subbody)
             if group == BB_INDOOR_GROUP:
                 self.x10_samples.append(subbody)
             elif group == BB_OUTDOOR_GROUP:
@@ -359,10 +408,7 @@ class RawPowerRecorder:
         elif len(body) > C1_GROUP_INDEX and body_type == C1_BODY_TYPE:
             group = body[C1_GROUP_INDEX]
             label += f" C1_group=0x{group:02X}"
-            if group == C1_ENERGY_GROUP:
-                self.c1_energy_samples.append(bytes(body))
-            elif group == C1_OUTDOOR_POWER_GROUP:
-                self.c1_outdoor_power_samples.append(bytes(body))
+            self.c1_samples.setdefault(group, []).append(bytes(body))
 
         self._write(
             f"{self.timestamp()} RX {label} body_len={len(body)}\n"
@@ -399,42 +445,50 @@ class RawPowerRecorder:
             values = " -> ".join(f"{sample[index]:02x}" for sample in comparable)
             print(f"    [{index:02d}] {values}")
 
-    def print_c1_summary(self) -> None:
-        """Report whether the device answered the group-four/seven queries."""
-        print("\n[C1 0x44 功率/能耗响应]")
-        power_query_states = self.query_power_states.get(PowerQuery.__name__, [])
-        print(
-            f"  已发送 {len(power_query_states)} 次；发送时 power 状态: "
-            f"{list(dict.fromkeys(power_query_states))}",
-        )
-        if self.c1_energy_samples:
-            lengths = sorted({len(sample) for sample in self.c1_energy_samples})
-            print(f"  收到 {len(self.c1_energy_samples)} 条，长度: {lengths}")
-            print(f"  最新 body_hex: {self.c1_energy_samples[-1].hex()}")
-        else:
-            print("  没有收到 C1 0x44 响应。")
+    def print_bb_summary(self) -> None:
+        """Print all BB response groups observed during this probe."""
+        print("\n[BB 查询响应概览]")
+        if not self.bb_samples:
+            print("  没有收到 BB 响应。")
+            return
+        for group, samples in sorted(self.bb_samples.items()):
+            lengths = sorted({len(sample) for sample in samples})
+            print(f"  0x{group:02X}: {len(samples)} 条，subbody 长度 {lengths}")
 
-        print("\n[C1 0x47 外机功率响应]")
-        group_seven_states = self.query_power_states.get(
-            GroupSevenQuery.__name__,
-            [],
-        )
+    def print_x10_total_elec(self) -> None:
+        """Print the exact-model Lua accumulator without guessing its unit."""
+        values = [
+            int.from_bytes(
+                sample[BB_X10_TOTAL_ELEC_START:BB_X10_TOTAL_ELEC_END],
+                "little",
+            )
+            for sample in self.x10_samples
+            if len(sample) >= BB_X10_TOTAL_ELEC_END
+        ]
+        print("\n[BB 0x10 累积字段观察]")
+        if not values:
+            print("  Lua 的 total_elec[46:50] 字段未返回。")
+            return
+        transitions = " -> ".join(str(value) for value in values)
+        print(f"  total_elec raw（LE32，Lua 命名）: {transitions}")
         print(
-            f"  已发送 {len(group_seven_states)} 次；发送时 power 状态: "
-            f"{list(dict.fromkeys(group_seven_states))}",
+            "  单位未知：可能是能耗、运行时长或设备内部计数；"
+            "本工具不会把它换算成 W、kWh 或小时。",
         )
-        if self.c1_outdoor_power_samples:
-            lengths = sorted(
-                {len(sample) for sample in self.c1_outdoor_power_samples},
-            )
+
+    def print_c1_summary(self) -> None:
+        """Report all standard C1 probes and responses."""
+        print("\n[C1 标准运行时长/电参/能耗探测]")
+        for query_class, group in C1_PROBES:
+            query_states = self.query_power_states.get(query_class.__name__, [])
+            samples = self.c1_samples.get(group, [])
             print(
-                f"  收到 {len(self.c1_outdoor_power_samples)} 条，长度: {lengths}",
+                f"  {C1_GROUP_LABELS[group]}: 已发送 {len(query_states)} 次，"
+                f"收到 {len(samples)} 条",
             )
-            print(
-                f"  最新 body_hex: {self.c1_outdoor_power_samples[-1].hex()}",
-            )
-        else:
-            print("  没有收到 C1 0x47 响应。")
+            if samples:
+                lengths = sorted({len(sample) for sample in samples})
+                print(f"    body 长度: {lengths}；最新: {samples[-1].hex()}")
 
     def print_22396831_lua_fields(self) -> None:
         """Print fields defined by the exact model 22396831 Lua."""
@@ -486,7 +540,7 @@ class RawPowerRecorder:
         else:
             print("  BB 0x4C 光伏模块字段: 未返回")
 
-        print("  精确 Lua 未定义 C1 0x44/0x47 查询或解析。")
+        print("  Lua 未定义 C1 电参的解析；本次仍会发送标准 C1 查询作交叉验证。")
 
 
 def print_capabilities(capabilities: Mapping[str, bool]) -> None:
@@ -611,19 +665,30 @@ def inspect_device(args: argparse.Namespace) -> int:  # noqa: C901
         original_build_query = device.build_query
 
         def build_query_with_c1_probes() -> list[Any]:
-            """Add explicit fixed-length C1 probes for a BB AC in any power state."""
+            """Add read-only C1 and Lua-known BB probes after BB detection."""
             queries: list[Any] = original_build_query()
             if not getattr(device, "_used_subprotocol", False):
                 return queries
             protocol_version = queries[0].protocol_version
-            if args.power_query and not any(
-                isinstance(query, PowerQuery) for query in queries
-            ):
-                queries.append(PowerQuery(protocol_version, padded=True))
-            if args.group_seven and not any(
-                isinstance(query, GroupSevenQuery) for query in queries
-            ):
-                queries.append(GroupSevenQuery(protocol_version, padded=True))
+            if args.bb_status_variants:
+                for bb_query_class in (
+                    SubProtocolQuery10RunStatus,
+                    SubProtocolQuery10RunStatus2,
+                    SubProtocolQuery15,
+                    SubProtocolQuery4C,
+                    SubProtocolQuery51,
+                ):
+                    if not any(isinstance(query, bb_query_class) for query in queries):
+                        queries.append(bb_query_class(protocol_version))
+            if args.all_c1_probes:
+                for c1_query_class, group in C1_PROBES:
+                    enabled = (group != C1_ENERGY_GROUP or args.power_query) and (
+                        group != C1_OUTDOOR_POWER_GROUP or args.group_seven
+                    )
+                    if enabled and not any(
+                        isinstance(query, c1_query_class) for query in queries
+                    ):
+                        queries.append(c1_query_class(protocol_version, padded=True))
             return queries
 
         def process_message_with_capture(message: bytes) -> dict[str, Any]:
@@ -655,7 +720,9 @@ def inspect_device(args: argparse.Namespace) -> int:  # noqa: C901
             and not used_bb_before_connect
         )
         if switched_to_bb:
-            print("检测到 BB 子协议，正在补充查询 BB 0x10/0x11/0x30 数据组……")
+            print(
+                "检测到 BB 子协议，正在补充标准 C1 与 Lua 已知 BB 只读查询……",
+            )
             device.refresh_status(check_protocol=True)
 
         print(
@@ -669,8 +736,10 @@ def inspect_device(args: argparse.Namespace) -> int:  # noqa: C901
             print_power_sample(device, sample_index + 1, args.samples)
 
         print_device_report(device, show_all=args.show_all)
+        recorder.print_bb_summary()
         recorder.print_x30_changes()
         if str(device.model) == "22396831" and int(device.subtype) == 0:
+            recorder.print_x10_total_elec()
             recorder.print_22396831_lua_fields()
         recorder.print_c1_summary()
         attributes = device.attributes
