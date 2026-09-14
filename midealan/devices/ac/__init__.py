@@ -133,6 +133,13 @@ class DeviceAttributes(StrEnum):
     water_pump_running = "water_pump_running"
     # group 7: real time compressor power
     compressor_power = "compressor_power"
+    # BB 0x10 model-specific telemetry.
+    navigator_run_mode = "navigator_run_mode"
+    navigator_running_fan_speed = "navigator_running_fan_speed"
+    navigator_t2_temperature = "navigator_t2_temperature"
+    navigator_t2b_temperature = "navigator_t2b_temperature"
+    navigator_energy_need = "navigator_energy_need"
+    navigator_total_elec = "navigator_total_elec"
 
 
 BB_FRESH_AIR_DEFAULT_SPEED = 60
@@ -151,10 +158,25 @@ class ACModelCapabilities:
 
 
 DEFAULT_AC_MODEL_CAPABILITIES = ACModelCapabilities()
+NAVIGATOR_AC_MODEL_CAPABILITIES = ACModelCapabilities(
+    attributes=frozenset(
+        {
+            DeviceAttributes.navigator_run_mode,
+            DeviceAttributes.navigator_running_fan_speed,
+            DeviceAttributes.navigator_t2_temperature,
+            DeviceAttributes.navigator_t2b_temperature,
+            DeviceAttributes.navigator_energy_need,
+            DeviceAttributes.navigator_total_elec,
+        },
+    ),
+    uses_bb_protocol=True,
+)
 # These BB fields use model-specific offsets and command payloads observed on
 # exact model/subtype pairs. Keep unrelated devices hidden from attributes and
 # commands whose bytes may have a different meaning on other firmware.
 AC_MODEL_CAPABILITIES = {
+    ("22396831", 0): NAVIGATOR_AC_MODEL_CAPABILITIES,
+    ("22396579", 0): NAVIGATOR_AC_MODEL_CAPABILITIES,
     ("23096633", 1): ACModelCapabilities(
         attributes=frozenset(
             {
@@ -1170,6 +1192,12 @@ class MideaACDevice(MideaDevice):
             DeviceAttributes.target_indoor_fan_speed,
             DeviceAttributes.water_pump_running,
             DeviceAttributes.compressor_power,
+            DeviceAttributes.navigator_run_mode,
+            DeviceAttributes.navigator_running_fan_speed,
+            DeviceAttributes.navigator_t2_temperature,
+            DeviceAttributes.navigator_t2b_temperature,
+            DeviceAttributes.navigator_energy_need,
+            DeviceAttributes.navigator_total_elec,
         ]:
             if attr == DeviceAttributes.prompt_tone:
                 self._attributes[DeviceAttributes.prompt_tone] = value

@@ -44,6 +44,15 @@ BB_INDOOR_TEMPERATURE_HIGH_INDEX = 8
 BB_INDOOR_HUMIDITY_INDEX = 30
 BB_SN8_FLAG_INDEX = 80
 BB_OUTDOOR_TEMPERATURE_HIGH_INDEX = 6
+BB_NAVIGATOR_RUN_MODE_INDEX = 4
+BB_NAVIGATOR_RUNNING_FAN_SPEED_INDEX = 5
+BB_NAVIGATOR_T2_TEMPERATURE_INDEX = 9
+BB_NAVIGATOR_T2B_TEMPERATURE_INDEX = 11
+BB_NAVIGATOR_ENERGY_NEED_INDEX = 13
+BB_NAVIGATOR_TOTAL_ELEC_INDEX = 46
+BB_NAVIGATOR_TOTAL_ELEC_LENGTH = 4
+BB_NAVIGATOR_TEMPERATURE_LENGTH = 2
+BB_NAVIGATOR_TEMPERATURE_DIVISOR = 100
 CONFORT_MODE_MIN_LENGTH = 16
 CONFORT_MODE_MIN_LENGTH2 = 23
 SMART_DRY_MIN_LENGTH = 20
@@ -1785,6 +1794,7 @@ class SubProtocolBody(MessageBody):
                     BB_FRESH_AIR_EXHAUST_SPEED_INDEX
                 ]
         elif data_type == ListTypes.X10:
+            self._parse_navigator_telemetry(subprotocol_body)
             if subprotocol_body_len > BB_INDOOR_TEMPERATURE_HIGH_INDEX:
                 if subprotocol_body[8] & 0x80 == SUB_PROTOCOL_BODY_TEMP_CHECK:
                     self.indoor_temperature = (
@@ -1823,6 +1833,46 @@ class SubProtocolBody(MessageBody):
                 ]
         elif data_type in (ListTypes.X13, ListTypes.X21):
             pass
+
+    def _parse_navigator_telemetry(self, body: bytearray) -> None:
+        """Parse additive Navigator telemetry from a BB 0x10 data payload."""
+        if len(body) > BB_NAVIGATOR_RUN_MODE_INDEX:
+            self.navigator_run_mode = body[BB_NAVIGATOR_RUN_MODE_INDEX]
+        if len(body) > BB_NAVIGATOR_RUNNING_FAN_SPEED_INDEX:
+            self.navigator_running_fan_speed = body[
+                BB_NAVIGATOR_RUNNING_FAN_SPEED_INDEX
+            ]
+        for attribute, offset in (
+            (
+                "navigator_t2_temperature",
+                BB_NAVIGATOR_T2_TEMPERATURE_INDEX,
+            ),
+            (
+                "navigator_t2b_temperature",
+                BB_NAVIGATOR_T2B_TEMPERATURE_INDEX,
+            ),
+        ):
+            if len(body) >= offset + BB_NAVIGATOR_TEMPERATURE_LENGTH:
+                raw_temperature = int.from_bytes(
+                    body[offset : offset + BB_NAVIGATOR_TEMPERATURE_LENGTH],
+                    "little",
+                    signed=True,
+                )
+                setattr(
+                    self,
+                    attribute,
+                    raw_temperature / BB_NAVIGATOR_TEMPERATURE_DIVISOR,
+                )
+        if len(body) > BB_NAVIGATOR_ENERGY_NEED_INDEX:
+            self.navigator_energy_need = body[BB_NAVIGATOR_ENERGY_NEED_INDEX]
+        if len(body) >= BB_NAVIGATOR_TOTAL_ELEC_INDEX + BB_NAVIGATOR_TOTAL_ELEC_LENGTH:
+            self.navigator_total_elec = int.from_bytes(
+                body[
+                    BB_NAVIGATOR_TOTAL_ELEC_INDEX : BB_NAVIGATOR_TOTAL_ELEC_INDEX
+                    + BB_NAVIGATOR_TOTAL_ELEC_LENGTH
+                ],
+                "little",
+            )
 
 
 class MessageACResponse(MessageResponse):
