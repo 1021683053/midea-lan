@@ -171,12 +171,11 @@ NAVIGATOR_AC_MODEL_CAPABILITIES = ACModelCapabilities(
     ),
     uses_bb_protocol=True,
 )
+NAVIGATOR_AC_MODELS = frozenset({"22396831", "22396579"})
 # These BB fields use model-specific offsets and command payloads observed on
 # exact model/subtype pairs. Keep unrelated devices hidden from attributes and
 # commands whose bytes may have a different meaning on other firmware.
 AC_MODEL_CAPABILITIES = {
-    ("22396831", 0): NAVIGATOR_AC_MODEL_CAPABILITIES,
-    ("22396579", 0): NAVIGATOR_AC_MODEL_CAPABILITIES,
     ("23096633", 1): ACModelCapabilities(
         attributes=frozenset(
             {
@@ -340,10 +339,15 @@ class MideaACDevice(MideaDevice):
                 DeviceAttributes.compressor_power: None,
             },
         )
-        self._model_key = (str(self.model), int(self.subtype))
-        self._model_capabilities = AC_MODEL_CAPABILITIES.get(
-            self._model_key,
-            DEFAULT_AC_MODEL_CAPABILITIES,
+        model = str(self.model)
+        self._model_key = (model, int(self.subtype))
+        self._model_capabilities = (
+            NAVIGATOR_AC_MODEL_CAPABILITIES
+            if model in NAVIGATOR_AC_MODELS
+            else AC_MODEL_CAPABILITIES.get(
+                self._model_key,
+                DEFAULT_AC_MODEL_CAPABILITIES,
+            )
         )
         self._attributes.update(
             dict.fromkeys(self._model_capabilities.attributes),
